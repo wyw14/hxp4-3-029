@@ -32,3 +32,24 @@ export interface LevelData {
 export interface LevelsData {
   levels: LevelData[];
 }
+
+export interface ChallengeRules {
+  timeLimit: number | null;
+  disableFrequencyDisplay: boolean;
+  maxErrors: number | null;
+}
+
+export interface ChallengeRecord {
+  id: string;
+  levelId: number;
+  rules: ChallengeRules;
+  completed: boolean;
+  timeUsed: number;
+  errorCount: number;
+  score: number;
+  completedAt: number;
+}
+
+export interface ChallengeRecordsData {
+  records: ChallengeRecord[];
+}

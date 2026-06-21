@@ -6,7 +6,9 @@ import type {
   ScreenPoint,
   CurvePoint,
   BackgroundStar,
-  LevelData
+  LevelData,
+  ChallengeRules,
+  ChallengeState
 } from './types';
 import { Renderer } from './renderer';
 import { getLevel, verifyEdge } from './api';
@@ -31,9 +33,13 @@ export class Game {
   private listeners: Array<() => void> = [];
   private completionTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
+  private challengeState: ChallengeState;
+
   private onLevelChange?: (level: LevelData) => void;
   private onProgressChange?: (current: number, total: number) => void;
   private onComplete?: (desc: string) => void;
+  private onChallengeUpdate?: (state: ChallengeState) => void;
+  private onChallengeEnd?: (success: boolean, timeUsed: number, errorCount: number, score: number) => void;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -50,6 +56,15 @@ export class Game {
       showFrequencies: false,
       isComplete: false,
       snapTargetId: null
+    };
+
+    this.challengeState = {
+      isActive: false,
+      rules: null,
+      startTime: 0,
+      errorCount: 0,
+      timeRemaining: null,
+      failed: false
     };
 
     this.resize();
@@ -70,10 +85,14 @@ export class Game {
     onLevelChange?: (level: LevelData) => void;
     onProgressChange?: (current: number, total: number) => void;
     onComplete?: (desc: string) => void;
+    onChallengeUpdate?: (state: ChallengeState) => void;
+    onChallengeEnd?: (success: boolean, timeUsed: number, errorCount: number, score: number) => void;
   }): void {
     this.onLevelChange = callbacks.onLevelChange;
     this.onProgressChange = callbacks.onProgressChange;
     this.onComplete = callbacks.onComplete;
+    this.onChallengeUpdate = callbacks.onChallengeUpdate;
+    this.onChallengeEnd = callbacks.onChallengeEnd;
   }
 
   private resize(): void {
@@ -139,6 +158,7 @@ export class Game {
 
   private handleMouseDown(e: MouseEvent): void {
     if (this.state.isComplete) return;
+    if (this.challengeState.isActive && this.challengeState.failed) return;
 
     const pos = this.getCanvasPos(e);
     const anchor = this.findNearestAnchor(pos);
@@ -177,6 +197,11 @@ export class Game {
 
   private async handleMouseUp(): Promise<void> {
     if (!this.state.drawState.isDrawing || !this.state.levelData) {
+      this.state.drawState = this.createEmptyDrawState();
+      return;
+    }
+
+    if (this.challengeState.isActive && this.challengeState.failed) {
       this.state.drawState = this.createEmptyDrawState();
       return;
     }
@@ -229,6 +254,16 @@ export class Game {
           this.state.completedEdges.add(edgeKey);
           this.checkCompletion();
         } else {
+          if (this.challengeState.isActive) {
+            this.challengeState.errorCount++;
+            this.onChallengeUpdate?.(this.challengeState);
+
+            if (this.challengeState.rules?.maxErrors != null &&
+                this.challengeState.errorCount >= this.challengeState.rules.maxErrors) {
+              this.failChallenge();
+            }
+          }
+
           setTimeout(() => {
             this.removeConnection(startId, endId);
           }, 1500);
@@ -299,13 +334,44 @@ export class Game {
       }
       this.completionTimeoutId = setTimeout(() => {
         this.onComplete?.(this.state.levelData!.creatureDescription);
+
+        if (this.challengeState.isActive && !this.challengeState.failed) {
+          this.completeChallenge();
+        }
+
         this.completionTimeoutId = null;
       }, 1500);
     }
   }
 
+  private completeChallenge(): void {
+    const timeUsed = (performance.now() - this.challengeState.startTime) / 1000;
+    const errorCount = this.challengeState.errorCount;
+    const score = this.calculateScore(timeUsed, errorCount);
+
+    this.onChallengeEnd?.(true, timeUsed, errorCount, score);
+  }
+
+  private failChallenge(): void {
+    this.challengeState.failed = true;
+    const timeUsed = (performance.now() - this.challengeState.startTime) / 1000;
+    const errorCount = this.challengeState.errorCount;
+    const score = 0;
+
+    this.onChallengeUpdate?.(this.challengeState);
+    this.onChallengeEnd?.(false, timeUsed, errorCount, score);
+  }
+
+  private calculateScore(timeUsed: number, errorCount: number): number {
+    const baseScore = 1000;
+    const timePenalty = timeUsed * 5;
+    const errorPenalty = errorCount * 100;
+    return Math.max(0, Math.floor(baseScore - timePenalty - errorPenalty));
+  }
+
   undoLastConnection(): void {
     if (this.state.connections.length === 0 || this.state.isComplete) return;
+    if (this.challengeState.isActive && this.challengeState.failed) return;
 
     const idx = this.state.connections.length - 1;
     const conn = this.state.connections[idx];
@@ -349,8 +415,15 @@ export class Game {
   }
 
   toggleFrequencies(): boolean {
+    if (this.challengeState.isActive && this.challengeState.rules?.disableFrequencyDisplay) {
+      return false;
+    }
     this.state.showFrequencies = !this.state.showFrequencies;
     return this.state.showFrequencies;
+  }
+
+  isFrequencyDisplayDisabled(): boolean {
+    return this.challengeState.isActive && this.challengeState.rules?.disableFrequencyDisplay === true;
   }
 
   async loadLevel(levelId: number): Promise<boolean> {
@@ -358,6 +431,15 @@ export class Game {
       clearTimeout(this.completionTimeoutId);
       this.completionTimeoutId = null;
     }
+
+    this.challengeState = {
+      isActive: false,
+      rules: null,
+      startTime: 0,
+      errorCount: 0,
+      timeRemaining: null,
+      failed: false
+    };
 
     const data = await getLevel(levelId);
     if (!data) return false;
@@ -374,8 +456,34 @@ export class Game {
 
     this.onLevelChange?.(data);
     this.onProgressChange?.(0, data.edges.length);
+    this.onChallengeUpdate?.(this.challengeState);
 
     return true;
+  }
+
+  async startChallenge(levelId: number, rules: ChallengeRules): Promise<boolean> {
+    const loaded = await this.loadLevel(levelId);
+    if (!loaded) return false;
+
+    this.challengeState = {
+      isActive: true,
+      rules,
+      startTime: performance.now(),
+      errorCount: 0,
+      timeRemaining: rules.timeLimit,
+      failed: false
+    };
+
+    if (rules.disableFrequencyDisplay) {
+      this.state.showFrequencies = false;
+    }
+
+    this.onChallengeUpdate?.(this.challengeState);
+    return true;
+  }
+
+  getChallengeState(): ChallengeState {
+    return { ...this.challengeState };
   }
 
   getCurrentLevel(): number {
@@ -418,6 +526,19 @@ export class Game {
     this.state.connections.forEach(c => {
       c.opacity = Math.min(c.opacity, 1);
     });
+
+    if (this.challengeState.isActive && !this.challengeState.failed && !this.state.isComplete) {
+      if (this.challengeState.rules?.timeLimit != null) {
+        const elapsed = (performance.now() - this.challengeState.startTime) / 1000;
+        const remaining = this.challengeState.rules.timeLimit - elapsed;
+        this.challengeState.timeRemaining = Math.max(0, remaining);
+
+        if (remaining <= 0) {
+          this.failChallenge();
+        }
+      }
+      this.onChallengeUpdate?.(this.challengeState);
+    }
   }
 
   private render(): void {

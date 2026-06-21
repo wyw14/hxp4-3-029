@@ -87,3 +87,29 @@ export interface VerifyResult {
   frequencies?: Record<string, number>;
   ratio?: [number, number] | null;
 }
+
+export interface ChallengeRules {
+  timeLimit: number | null;
+  disableFrequencyDisplay: boolean;
+  maxErrors: number | null;
+}
+
+export interface ChallengeRecord {
+  id: string;
+  levelId: number;
+  rules: ChallengeRules;
+  completed: boolean;
+  timeUsed: number;
+  errorCount: number;
+  score: number;
+  completedAt: number;
+}
+
+export interface ChallengeState {
+  isActive: boolean;
+  rules: ChallengeRules | null;
+  startTime: number;
+  errorCount: number;
+  timeRemaining: number | null;
+  failed: boolean;
+}

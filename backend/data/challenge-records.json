@@ -1,0 +1,18 @@
+{
+  "records": [
+    {
+      "errorCount": 1,
+      "rules": {
+        "disableFrequencyDisplay": true,
+        "timeLimit": 120,
+        "maxErrors": 3
+      },
+      "completed": true,
+      "score": 675,
+      "levelId": 1,
+      "timeUsed": 45.5,
+      "id": "ch_1781938285433_g2oqtpf",
+      "completedAt": 1781938285433
+    }
+  ]
+}

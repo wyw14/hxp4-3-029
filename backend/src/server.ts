@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
-import type { LevelsData, LevelData } from './types';
+import type { LevelsData, LevelData, ChallengeRecord, ChallengeRecordsData, ChallengeRules } from './types';
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3003;
@@ -12,6 +12,7 @@ app.use(express.json());
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const LEVELS_FILE = path.join(DATA_DIR, 'levels.json');
+const CHALLENGE_FILE = path.join(DATA_DIR, 'challenge-records.json');
 
 function loadLevels(): LevelsData {
   try {
@@ -34,6 +35,38 @@ function saveLevels(data: LevelsData): boolean {
     console.error('Failed to save levels:', err);
     return false;
   }
+}
+
+function loadChallengeRecords(): ChallengeRecordsData {
+  try {
+    if (!fs.existsSync(CHALLENGE_FILE)) {
+      return { records: [] };
+    }
+    const raw = fs.readFileSync(CHALLENGE_FILE, 'utf-8');
+    return JSON.parse(raw) as ChallengeRecordsData;
+  } catch (err) {
+    console.error('Failed to load challenge records:', err);
+    return { records: [] };
+  }
+}
+
+function saveChallengeRecords(data: ChallengeRecordsData): boolean {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(CHALLENGE_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    return true;
+  } catch (err) {
+    console.error('Failed to save challenge records:', err);
+    return false;
+  }
+}
+
+function rulesMatch(a: ChallengeRules, b: ChallengeRules): boolean {
+  return a.timeLimit === b.timeLimit &&
+    a.disableFrequencyDisplay === b.disableFrequencyDisplay &&
+    a.maxErrors === b.maxErrors;
 }
 
 function gcd(a: number, b: number): number {
@@ -193,6 +226,90 @@ app.post('/api/levels', (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Failed to save level'
+    });
+  }
+});
+
+app.get('/api/challenge/records', (_req, res) => {
+  const data = loadChallengeRecords();
+  res.json({
+    success: true,
+    total: data.records.length,
+    records: data.records
+  });
+});
+
+app.get('/api/challenge/records/:levelId', (req, res) => {
+  const levelId = parseInt(req.params.levelId);
+  const data = loadChallengeRecords();
+  const records = data.records.filter(r => r.levelId === levelId);
+
+  res.json({
+    success: true,
+    levelId,
+    total: records.length,
+    records: records.sort((a, b) => b.score - a.score)
+  });
+});
+
+app.post('/api/challenge/records', (req, res) => {
+  const record = req.body as Omit<ChallengeRecord, 'id' | 'completedAt'>;
+
+  if (!record || record.levelId == null || !record.rules) {
+    res.status(400).json({
+      success: false,
+      error: 'Invalid challenge record data'
+    });
+    return;
+  }
+
+  const data = loadChallengeRecords();
+
+  const newRecord: ChallengeRecord = {
+    ...record,
+    id: `ch_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+    completedAt: Date.now()
+  };
+
+  data.records.push(newRecord);
+
+  if (saveChallengeRecords(data)) {
+    res.json({
+      success: true,
+      record: newRecord
+    });
+  } else {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to save challenge record'
+    });
+  }
+});
+
+app.delete('/api/challenge/records/:id', (req, res) => {
+  const id = req.params.id;
+  const data = loadChallengeRecords();
+  const idx = data.records.findIndex(r => r.id === id);
+
+  if (idx < 0) {
+    res.status(404).json({
+      success: false,
+      error: `Challenge record ${id} not found`
+    });
+    return;
+  }
+
+  data.records.splice(idx, 1);
+
+  if (saveChallengeRecords(data)) {
+    res.json({
+      success: true,
+      deleted: id
+    });
+  } else {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete challenge record'
     });
   }
 });

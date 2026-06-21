@@ -1,4 +1,4 @@
-import type { LevelData, VerifyResult } from './types';
+import type { LevelData, VerifyResult, ChallengeRecord, ChallengeRules } from './types';
 
 const API_BASE = '/api';
 
@@ -49,5 +49,52 @@ export async function healthCheck(): Promise<boolean> {
     return data.success && data.status === 'running';
   } catch {
     return false;
+  }
+}
+
+export async function getChallengeRecords(levelId?: number): Promise<ChallengeRecord[]> {
+  try {
+    const url = levelId != null
+      ? `${API_BASE}/challenge/records/${levelId}`
+      : `${API_BASE}/challenge/records`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.success) {
+      return data.records as ChallengeRecord[];
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+export async function submitChallengeRecord(
+  levelId: number,
+  rules: ChallengeRules,
+  completed: boolean,
+  timeUsed: number,
+  errorCount: number,
+  score: number
+): Promise<ChallengeRecord | null> {
+  try {
+    const res = await fetch(`${API_BASE}/challenge/records`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        levelId,
+        rules,
+        completed,
+        timeUsed,
+        errorCount,
+        score
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      return data.record as ChallengeRecord;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
